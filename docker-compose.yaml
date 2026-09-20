@@ -1,0 +1,12 @@
+version: "3"
+
+services:
+  application:
+    volumes:
+      - type: bind
+        source: ./products.json
+        target: /usr/shophook/products.json
+    build:
+      context: "."
+      dockerfile: Dockerfile
+    restart: always
