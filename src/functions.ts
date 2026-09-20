@@ -99,6 +99,9 @@ export function filterRelevantVariants(products: z.output<typeof ShopifyProduct>
           variant.title === "Default Title" ? product.title : `${product.title} - ${variant.title}`;
         const image = variant.featured_image?.src ?? product.images[0].src;
 
+        const variantCreatedAt = new Date(variant.created_at);
+        const variantUpdatedAt = variant.updated_at ? new Date(variant.updated_at) : undefined;
+
         relevant.push({
           key,
           price: Number(variant.price),
@@ -108,6 +111,8 @@ export function filterRelevantVariants(products: z.output<typeof ShopifyProduct>
           productId: product.id,
           variantId: variant.id,
           handle: product.handle,
+          createdTimestamp: variantCreatedAt.getTime(),
+          updatedTimestamp: variantUpdatedAt?.getTime(),
         });
       }
     }
@@ -180,7 +185,20 @@ export function productChanges(
   };
 }
 
+function formatDiscordTimestamp(ms: number) {
+  return `<t:${Math.floor(ms / 1_000)}:F>`;
+}
+
 export function formatProductbase(record: z.output<typeof ProductVariantRecord>, prefix?: string) {
+  const detailLines: string[] = [
+    `Price: ${record.available ? `€${record.price}` : `~~€${record.price}~~ **[SOLD OUT]**`}`,
+    `Created: ${formatDiscordTimestamp(record.createdTimestamp)}`,
+  ];
+
+  if (record.updatedTimestamp) {
+    detailLines.push(`Updated: ${formatDiscordTimestamp(record.updatedTimestamp)}`);
+  }
+
   return {
     type: ComponentType.Section,
     components: [
@@ -190,7 +208,7 @@ export function formatProductbase(record: z.output<typeof ProductVariantRecord>,
       },
       {
         type: ComponentType.TextDisplay,
-        content: record.available ? `€${record.price}` : `~~€${record.price}~~ **[SOLD OUT]**`,
+        content: detailLines.join("\n"),
       },
     ],
     accessory: {

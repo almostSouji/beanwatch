@@ -20,6 +20,8 @@ export const ShopifyVariant = z.object({
   featured_image: ShopifyImage.nullish(),
   price: z.string(),
   available: z.boolean(),
+  created_at: z.string(),
+  updated_at: z.string().nullish(),
 });
 
 export const ShopifyProduct = z.object({
@@ -43,6 +45,8 @@ export const ProductVariantRecord = z.object({
   productId: z.number(),
   variantId: z.number(),
   handle: z.string(),
+  createdTimestamp: z.number(),
+  updatedTimestamp: z.number().optional(),
 });
 
 export const ProductVairantRecords = z.array(ProductVariantRecord);
