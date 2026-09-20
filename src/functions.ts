@@ -17,6 +17,7 @@ import {
 } from "./model.js";
 import * as z from "zod";
 import { writeFileSync } from "node:fs";
+import { logger } from "./logger.js";
 
 export async function executeDiscordWebhook(
   components: APIComponentInContainer[],
@@ -135,15 +136,21 @@ export async function saveRecords(variants: z.output<typeof ProductVariantRecord
 }
 
 export async function loadRecords() {
-  const res = await readFile(new URL(PRODUCT_PATH, import.meta.url));
-  const records = ProductVairantRecords.parse(JSON.parse(res.toString()));
-
   const map = new Map<string, z.output<typeof ProductVariantRecord>>();
-  for (const record of records) {
-    map.set(record.key, record);
-  }
+  try {
+    const res = await readFile(new URL(PRODUCT_PATH, import.meta.url));
+    const records = ProductVairantRecords.parse(JSON.parse(res.toString()));
 
-  return map;
+    for (const record of records) {
+      map.set(record.key, record);
+    }
+
+    return map;
+  } catch (_error) {
+    const error = _error as Error;
+    logger.info(error, `Error while trying to load records, assuming empty.`);
+    return map;
+  }
 }
 
 export function productChanges(
@@ -166,7 +173,7 @@ export function productChanges(
     lines,
     color:
       productBefore.available === productAfter.available
-        ? Colors.Changed
+        ? undefined
         : productAfter.available
           ? Colors.Available
           : Colors.Deleted,
@@ -183,7 +190,7 @@ export function formatProductbase(record: z.output<typeof ProductVariantRecord>,
       },
       {
         type: ComponentType.TextDisplay,
-        content: `€${record.price}${record.available ? "" : " **[SOLD OUT]**"}`,
+        content: record.available ? `€${record.price}` : `~~€${record.price}~~ **[SOLD OUT]**`,
       },
     ],
     accessory: {

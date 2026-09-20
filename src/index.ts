@@ -13,7 +13,12 @@ import {
   Colors,
   productChanges,
 } from "./functions.js";
-import { ComponentType } from "discord-api-types/v10";
+import {
+  APIActionRowComponent,
+  APIButtonComponent,
+  ButtonStyle,
+  ComponentType,
+} from "discord-api-types/v10";
 
 const rest = new REST({ version: "10" });
 const controller = new AbortController();
@@ -25,7 +30,7 @@ logger.info(`Loaded configuration for ${config.length} webhook.`);
 
 async function tick() {
   logger.info("Heartbeat");
-  const knownRecord = await loadRecords();
+  const knownRecords = await loadRecords();
   const products = await fetchProducts();
   logger.info(`Fetched ${products.length} products.`);
 
@@ -39,23 +44,37 @@ async function tick() {
   for (const variant of relevantVariants) {
     variantKeys.add(variant.key);
 
-    const knownProduct = knownRecord.get(variant.key);
+    const knownRecord = knownRecords.get(variant.key);
 
-    const base = formatProductbase(variant, knownProduct ? undefined : "🆕");
+    const base = formatProductbase(
+      variant,
+      knownRecord || knownRecords.size === 0 ? undefined : "🆕",
+    );
+    const link = {
+      type: ComponentType.ActionRow,
+      components: [
+        {
+          type: ComponentType.Button,
+          style: ButtonStyle.Link,
+          url: `https://bossmonsta.com/products/${variant.handle}?variant=${variant.variantId}`,
+          label: "Shop",
+        } satisfies APIButtonComponent,
+      ],
+    } satisfies APIActionRowComponent<APIButtonComponent>;
 
-    if (!knownProduct) {
+    if (!knownRecord) {
       logger.debug(variant, `Unknown product ${variant.key}`);
       await executeDiscordWebhooks(
         config,
-        [base],
+        [base, link],
         rest,
-        variant.available ? Colors.Available : Colors.Deleted,
+        variant.available ? Colors.Available : undefined,
       );
 
       continue;
     }
 
-    const change = productChanges(knownProduct, variant);
+    const change = productChanges(knownRecord, variant);
 
     if (!change.lines.length) {
       continue;
@@ -69,17 +88,16 @@ async function tick() {
           type: ComponentType.TextDisplay,
           content: change.lines.join("\n"),
         },
+        link,
       ],
       rest,
       change.color,
     );
-
-    continue;
   }
 
-  for (const record of knownRecord.values()) {
+  for (const record of knownRecords.values()) {
     if (!variantKeys.has(record.key)) {
-      await executeDiscordWebhooks(config, [formatProductbase(record)], rest, Colors.Deleted);
+      await executeDiscordWebhooks(config, [formatProductbase(record, "🗑️")], rest, Colors.Deleted);
       continue;
     }
   }
