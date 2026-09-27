@@ -1,7 +1,13 @@
 import type { REST } from "@discordjs/rest";
 import {
-  APIComponentInContainer,
+  APIActionRowComponent,
+  APIButtonComponent,
+  APIContainerComponent,
+  APIMessage,
+  APIMessageTopLevelComponent,
   APISectionComponent,
+  APITextDisplayComponent,
+  ButtonStyle,
   ComponentType,
   MessageFlags,
 } from "discord-api-types/v10";
@@ -19,57 +25,42 @@ import * as z from "zod";
 import { writeFileSync } from "node:fs";
 import { logger } from "./logger.js";
 
-export async function executeDiscordWebhook(
-  components: APIComponentInContainer[],
-  {
-    username,
-    avatarUrl,
-    discordRest,
-    hookBase,
-    mentionRoleId,
-    containerColor,
-  }: {
-    username: string;
-    avatarUrl?: string;
-    discordRest: REST;
-    hookBase: string;
-    mentionRoleId?: string;
-    containerColor?: number;
-  },
+export async function postOrEditItem(
+  rest: REST,
+  hookBase: string,
+  components: APIMessageTopLevelComponent[],
+  messageId?: string,
 ) {
-  await discordRest.post(`/${hookBase}?wait=true&with_components=true`, {
-    auth: false,
-    body: {
-      username,
-      avatar_url: avatarUrl,
-      flags: MessageFlags.IsComponentsV2,
-      allowed_mentions: mentionRoleId ? { roles: [mentionRoleId] } : { parse: [] },
-      components: [
-        {
-          type: ComponentType.Container,
-          components,
-          accent_color: containerColor,
-        },
-      ],
-    },
-  });
+  const body = {
+    flags: MessageFlags.IsComponentsV2,
+    allowed_mentions: { parse: [] },
+    components,
+  };
+
+  if (messageId) {
+    const url = `/${hookBase}/messages/${messageId}?with_components=true` as `/${string}`;
+    return (await rest.patch(url, { body, auth: false })) as APIMessage;
+  }
+
+  const url = `/${hookBase}?wait=true&with_components=true` as `/${string}`;
+  return (await rest.post(url, { body, auth: false })) as APIMessage;
 }
 
-export async function executeDiscordWebhooks(
-  config: z.output<typeof Config>,
-  components: APIComponentInContainer[],
+export async function postJournal(
   rest: REST,
-  color?: number,
+  hookBase: string,
+  journalThreadId: string,
+  content: string,
 ) {
-  for (const entry of config) {
-    await executeDiscordWebhook(components, {
-      username: "Beanwatch",
-      hookBase: `webhooks/${entry.discord_webhook_id}/${entry.discord_webhook_token}`,
-      mentionRoleId: entry.discord_notification_role_id ?? undefined,
-      discordRest: rest,
-      containerColor: color,
-    });
-  }
+  const body = {
+    content,
+    allowed_mentions: { parse: [] },
+  };
+
+  await rest.post(`/${hookBase}?wait=true&thread_id=${journalThreadId}`, {
+    auth: false,
+    body,
+  });
 }
 
 export async function loadConfig(path: string) {
@@ -79,25 +70,43 @@ export async function loadConfig(path: string) {
   return Config.parse(configObject);
 }
 
-export async function fetchProducts() {
-  const res = await fetch("https://bossmonsta.com/products.json?limit=250").then((r) => r.json());
+export async function fetchProducts(link: string) {
+  const res = await fetch(link).then((r) => r.json());
   return ShopifyResult.parse(res)?.products;
 }
 
-export function filterRelevantVariants(products: z.output<typeof ShopifyProduct>[]) {
+export function filterRelevantVariants(
+  products: z.output<typeof ShopifyProduct>[],
+  webhookId: string,
+  shopBase: string,
+  {
+    titleAny,
+    vendorAny,
+  }: {
+    titleAny?: string[];
+    vendorAny?: string[];
+  },
+) {
   const relevant: z.output<typeof ProductVairantRecords> = [];
+  logger.debug({ titleAny, vendorAny }, `Filtering ${shopBase} for ${webhookId}`);
+
   for (const product of products) {
     const lowerTitle = product.title.toLowerCase();
-    if (
-      ["protogen", "protobean", "proto bean"].some(
-        (phrase) => lowerTitle.includes(phrase) && lowerTitle.includes("plushie"),
-      )
-    ) {
+    const lowerVendor = product.vendor.toLowerCase();
+
+    const titleAnyConditionMet = titleAny?.some((phrase) =>
+      lowerTitle.includes(phrase.toLowerCase()),
+    );
+    const vendorAnyConditionMet = vendorAny?.some((phrase) =>
+      lowerVendor.includes(phrase.toLowerCase()),
+    );
+
+    if (titleAnyConditionMet || vendorAnyConditionMet) {
       for (const variant of product.variants) {
         const key = `${product.id}:${variant.id}`;
         const name =
           variant.title === "Default Title" ? product.title : `${product.title} - ${variant.title}`;
-        const image = variant.featured_image?.src ?? product.images[0].src;
+        const image = variant.featured_image?.src ?? product.images?.[0]?.src;
 
         const variantCreatedAt = new Date(variant.created_at);
         const variantUpdatedAt = variant.updated_at ? new Date(variant.updated_at) : undefined;
@@ -113,6 +122,9 @@ export function filterRelevantVariants(products: z.output<typeof ShopifyProduct>
           handle: product.handle,
           createdTimestamp: variantCreatedAt.getTime(),
           updatedTimestamp: variantUpdatedAt?.getTime(),
+          hookId: webhookId,
+          shopBase,
+          vendor: product.vendor,
         });
       }
     }
@@ -131,19 +143,21 @@ export function buildVariantMap(variants: z.output<typeof ProductVairantRecords>
   return map;
 }
 
-const PRODUCT_PATH = "../products.json";
-
-export async function saveRecords(variants: z.output<typeof ProductVariantRecord>[]) {
-  const path = fileURLToPath(new URL(PRODUCT_PATH, import.meta.url));
-  const stringVariants = JSON.stringify(variants);
+export async function saveRecords(
+  recordPath: string,
+  variants: z.output<typeof ProductVariantRecord>[],
+  hookId: string,
+) {
+  const path = fileURLToPath(new URL(recordPath, import.meta.url));
+  const stringVariants = JSON.stringify(variants.map((variant) => ({ ...variant, hookId })));
 
   writeFileSync(path, stringVariants);
 }
 
-export async function loadRecords() {
+export async function loadRecords(recordPath: string) {
   const map = new Map<string, z.output<typeof ProductVariantRecord>>();
   try {
-    const res = await readFile(new URL(PRODUCT_PATH, import.meta.url));
+    const res = await readFile(new URL(recordPath, import.meta.url));
     const records = ProductVairantRecords.parse(JSON.parse(res.toString()));
 
     for (const record of records) {
@@ -153,75 +167,94 @@ export async function loadRecords() {
     return map;
   } catch (_error) {
     const error = _error as Error;
-    logger.info(error, `Error while trying to load records, assuming empty.`);
+    logger.debug(error, `Error while trying to load records, assuming empty.`);
     return map;
   }
-}
-
-export function productChanges(
-  productBefore: z.output<typeof ProductVariantRecord>,
-  productAfter: z.output<typeof ProductVariantRecord>,
-) {
-  const lines = [];
-
-  if (productBefore.price !== productAfter.price) {
-    lines.push(`Price before: \`${productBefore.price}\` after: \`${productAfter.price}\``);
-  }
-
-  if (productBefore.available !== productAfter.available) {
-    lines.push(
-      `Available before: \`${productBefore.available}\` after: \`${productAfter.available}\``,
-    );
-  }
-
-  return {
-    lines,
-    color:
-      productBefore.available === productAfter.available
-        ? undefined
-        : productAfter.available
-          ? Colors.Available
-          : Colors.Deleted,
-  };
 }
 
 function formatDiscordTimestamp(ms: number) {
   return `<t:${Math.floor(ms / 1_000)}:F>`;
 }
 
-export function formatProductbase(record: z.output<typeof ProductVariantRecord>, prefix?: string) {
-  const detailLines: string[] = [
-    `Price: ${record.available ? `€${record.price}` : `~~€${record.price}~~ **[SOLD OUT]**`}`,
-    `Created: ${formatDiscordTimestamp(record.createdTimestamp)}`,
-  ];
-
-  if (record.updatedTimestamp) {
-    detailLines.push(`Updated: ${formatDiscordTimestamp(record.updatedTimestamp)}`);
+export function variantDifference(
+  linkBaseUrl: string,
+  productBefore?: z.output<typeof ProductVariantRecord>,
+  productAfter?: z.output<typeof ProductVariantRecord>,
+) {
+  const newestVersion = productAfter ?? productBefore;
+  if (!newestVersion) {
+    return undefined;
   }
 
-  return {
-    type: ComponentType.Section,
-    components: [
-      {
-        type: ComponentType.TextDisplay,
-        content: `### ${prefix ? [prefix, record.name].join(" ") : record.name}`,
-      },
-      {
-        type: ComponentType.TextDisplay,
-        content: detailLines.join("\n"),
-      },
-    ],
-    accessory: {
-      type: ComponentType.Thumbnail,
-      media: {
-        url: record.image,
-      },
-    },
-  } as APISectionComponent;
-}
+  const detailLines = [
+    `Vendor: ${newestVersion.vendor}`,
+    `Price: €${newestVersion.price}`,
+    `Created: ${formatDiscordTimestamp(newestVersion.createdTimestamp)}`,
+  ];
 
-export enum Colors {
-  Available = 0x3ba55d,
-  Changed = 0x5865f2,
-  Deleted = 0xed4245,
+  if (newestVersion.updatedTimestamp) {
+    detailLines.push(`Updated: ${formatDiscordTimestamp(newestVersion.updatedTimestamp)}`);
+  }
+
+  const display = newestVersion.image
+    ? ({
+        type: ComponentType.Section,
+        components: [
+          {
+            type: ComponentType.TextDisplay,
+            content: `### ${newestVersion.name}`,
+          },
+          {
+            type: ComponentType.TextDisplay,
+            content: detailLines.join("\n"),
+          },
+        ],
+        accessory: {
+          type: ComponentType.Thumbnail,
+          media: {
+            url: newestVersion.image,
+          },
+        },
+      } satisfies APISectionComponent)
+    : ({
+        type: ComponentType.TextDisplay,
+        content: [`### ${newestVersion.name}`, ...detailLines].join("\n"),
+      } satisfies APITextDisplayComponent);
+
+  return {
+    component: [
+      {
+        type: ComponentType.Container,
+        components: [
+          display,
+          {
+            type: ComponentType.ActionRow,
+            components: [
+              {
+                type: ComponentType.Button,
+                style: ButtonStyle.Link,
+                url: `${linkBaseUrl}/products/${newestVersion.handle}?variant=${newestVersion.variantId}`,
+                label: "Shop",
+              } satisfies APIButtonComponent,
+            ],
+          } satisfies APIActionRowComponent<APIButtonComponent>,
+        ],
+        accent_color: newestVersion.available ? 0x3ba55d : undefined,
+      } satisfies APIContainerComponent,
+    ],
+    priceChange:
+      productBefore && productAfter && productBefore.price !== productAfter.price
+        ? {
+            before: Boolean(productBefore.price),
+            after: Boolean(productAfter.price),
+          }
+        : null,
+    availableChange:
+      productBefore && productAfter && productBefore.available !== productAfter.available
+        ? {
+            before: Boolean(productBefore.available),
+            after: Boolean(productAfter.available),
+          }
+        : null,
+  };
 }

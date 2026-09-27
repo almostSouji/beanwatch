@@ -2,4 +2,4 @@ node_modules
 dist
 *.tsbuildinfo
 config.yml
-products.json
+records/

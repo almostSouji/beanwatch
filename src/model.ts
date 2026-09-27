@@ -3,8 +3,11 @@ import * as z from "zod";
 export const ConfigEntry = z.object({
   discord_webhook_token: z.string(),
   discord_webhook_id: z.string(),
-  discord_notification_role_id: z.string().nullish(),
+  discord_thread_id: z.string(),
   description: z.string().nullish(),
+  catalogues: z.string().array(),
+  title_any: z.string().array().optional(),
+  vendor_any: z.string().array().optional(),
 });
 
 export const Config = z.array(ConfigEntry);
@@ -29,7 +32,8 @@ export const ShopifyProduct = z.object({
   title: z.string(),
   handle: z.string(),
   variants: z.array(ShopifyVariant),
-  images: z.array(ShopifyImage),
+  images: z.array(ShopifyImage).optional(),
+  vendor: z.string(),
 });
 
 export const ShopifyResult = z.object({
@@ -41,12 +45,16 @@ export const ProductVariantRecord = z.object({
   price: z.number(),
   available: z.boolean(),
   name: z.string(),
-  image: z.string(),
+  image: z.string().optional(),
   productId: z.number(),
   variantId: z.number(),
   handle: z.string(),
   createdTimestamp: z.number(),
   updatedTimestamp: z.number().optional(),
+  messageId: z.string().optional(),
+  hookId: z.string(),
+  shopBase: z.string(),
+  vendor: z.string(),
 });
 
 export const ProductVairantRecords = z.array(ProductVariantRecord);

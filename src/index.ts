@@ -1,3 +1,4 @@
+import * as z from "zod";
 import { REST } from "@discordjs/rest";
 import process from "node:process";
 import { setTimeout } from "node:timers/promises";
@@ -8,17 +9,11 @@ import {
   loadRecords,
   filterRelevantVariants,
   saveRecords,
-  formatProductbase,
-  executeDiscordWebhooks,
-  Colors,
-  productChanges,
+  variantDifference,
+  postOrEditItem,
+  postJournal,
 } from "./functions.js";
-import {
-  APIActionRowComponent,
-  APIButtonComponent,
-  ButtonStyle,
-  ComponentType,
-} from "discord-api-types/v10";
+import { ProductVariantRecord, ShopifyProduct } from "./model.js";
 
 const rest = new REST({ version: "10" });
 const controller = new AbortController();
@@ -28,81 +23,167 @@ const config = await loadConfig("../config.yml");
 
 logger.info(`Loaded configuration for ${config.length} webhook.`);
 
+const hooksPerCatalogue = new Map<string, string[]>();
+
+for (const entry of config) {
+  for (const catalogue of entry.catalogues) {
+    const currentHooks = hooksPerCatalogue.get(catalogue) ?? [];
+    currentHooks.push(entry.discord_webhook_id);
+    hooksPerCatalogue.set(catalogue, currentHooks);
+  }
+}
+
+const PAGE_SIZE = 250;
+
 async function tick() {
   logger.info("Heartbeat");
-  const knownRecords = await loadRecords();
-  const products = await fetchProducts();
-  logger.info(`Fetched ${products.length} products.`);
 
-  if (products.length == 250) {
-    logger.warn("Observed maximum page size, may be missing products!");
+  const productStore = new Map<string, z.output<typeof ShopifyProduct>[]>();
+
+  for (const link of hooksPerCatalogue.keys()) {
+    const shopProducts = new Map<number, z.output<typeof ShopifyProduct>>();
+
+    let page = 1;
+
+    while (page > 0) {
+      const url = `${link}/products.json?limit=${PAGE_SIZE}&page=${page}`;
+
+      logger.debug({ url, link, page }, "Shop fetching");
+
+      const result = await fetchProducts(url);
+      for (const resultEntry of result) {
+        shopProducts.set(resultEntry.id, resultEntry);
+      }
+
+      if (result.length <= PAGE_SIZE) {
+        page = 0;
+      }
+    }
+
+    productStore.set(link, Array.from(shopProducts.values()));
   }
 
-  const relevantVariants = filterRelevantVariants(products);
-  const variantKeys = new Set<string>();
+  for (const entry of config) {
+    const knownRecords = await loadRecords(`../records/${entry.discord_webhook_id}.json`);
+    const entryVariants = new Map<string, z.output<typeof ProductVariantRecord>>();
+    const hookBase =
+      `/webhooks/${entry.discord_webhook_id}/${entry.discord_webhook_token}` as `/${string}`;
 
-  for (const variant of relevantVariants) {
-    variantKeys.add(variant.key);
+    logger.debug(`Known records loaded for ${entry.discord_webhook_id} (${knownRecords.size})`);
 
-    const knownRecord = knownRecords.get(variant.key);
+    const variantKeys = new Set<string>();
+    for (const link of entry.catalogues) {
+      logger.info(`Getting catalogue for ${link}`);
+      const catalogue = productStore.get(link);
 
-    const base = formatProductbase(
-      variant,
-      knownRecord || knownRecords.size === 0 ? undefined : "🆕",
-    );
-    const link = {
-      type: ComponentType.ActionRow,
-      components: [
-        {
-          type: ComponentType.Button,
-          style: ButtonStyle.Link,
-          url: `https://bossmonsta.com/products/${variant.handle}?variant=${variant.variantId}`,
-          label: "Shop",
-        } satisfies APIButtonComponent,
-      ],
-    } satisfies APIActionRowComponent<APIButtonComponent>;
+      if (!catalogue) {
+        logger.error({ link }, "Expected to find product catalogue");
+        continue;
+      }
 
-    if (!knownRecord) {
-      logger.debug(variant, `Unknown product ${variant.key}`);
-      await executeDiscordWebhooks(
-        config,
-        [base, link],
-        rest,
-        variant.available ? Colors.Available : undefined,
+      const filtered = filterRelevantVariants(catalogue, entry.discord_webhook_id, link, {
+        titleAny: entry.title_any,
+        vendorAny: entry.vendor_any,
+      });
+
+      logger.debug(
+        { total: catalogue.length, filtered: filtered.length },
+        `Filtered shop ${link} for ${entry.discord_webhook_id}`,
       );
 
-      continue;
+      for (const variant of filtered) {
+        variantKeys.add(variant.key);
+
+        entryVariants.set(variant.key, variant);
+        const variantKnownRecord = knownRecords.get(variant.key);
+        const difference = variantDifference(link, variantKnownRecord, variant);
+
+        if (
+          !difference ||
+          (variantKnownRecord && !difference?.availableChange && !difference?.priceChange)
+        ) {
+          continue;
+        }
+
+        const message = await postOrEditItem(
+          rest,
+          hookBase,
+          difference.component,
+          variantKnownRecord?.messageId,
+        );
+
+        entryVariants.set(variant.key, { ...variant, messageId: message.id });
+
+        const itemLink = `[${variant.name}](<${link}/products/${variant.handle}?variant=${variant.variantId}>)`;
+
+        if (!variantKnownRecord) {
+          await postJournal(rest, hookBase, entry.discord_thread_id, `New Item: ${itemLink}`);
+          continue;
+        }
+
+        if (difference.availableChange) {
+          logger.debug(
+            { change: difference.availableChange },
+            `Availability change ${variant.handle}`,
+          );
+
+          if (difference.availableChange.after) {
+            await postJournal(
+              rest,
+              hookBase,
+              entry.discord_thread_id,
+              `Item became available: ${itemLink}`,
+            );
+          } else if (difference.availableChange.before) {
+            await postJournal(
+              rest,
+              hookBase,
+              entry.discord_thread_id,
+              `Item no longer available: ${itemLink}`,
+            );
+          }
+
+          continue;
+        }
+
+        if (difference.priceChange) {
+          logger.debug({ change: difference.priceChange }, `Price change ${variant.handle}`);
+
+          await postJournal(
+            rest,
+            hookBase,
+            entry.discord_thread_id,
+            `Price change: ${itemLink} €~~${difference.priceChange.before}~~ **€${difference.priceChange.after}**`,
+          );
+        }
+      }
     }
 
-    const change = productChanges(knownRecord, variant);
+    for (const [key, value] of knownRecords.entries()) {
+      if (!variantKeys.has(key)) {
+        await rest.delete(`${hookBase}/messages/${value.messageId}`, { auth: false }).catch(() => {
+          logger.info(
+            `Hook message ${hookBase}/messages/${value.messageId} for record ${value.key} already deleted`,
+          );
+        });
 
-    if (!change.lines.length) {
-      continue;
+        logger.debug(`Record ${value.key} no longer available in the shop.`);
+        await postJournal(
+          rest,
+          hookBase,
+          entry.discord_thread_id,
+          `Removed from shop: ${value.name}`,
+        );
+      }
     }
 
-    await executeDiscordWebhooks(
-      config,
-      [
-        base,
-        {
-          type: ComponentType.TextDisplay,
-          content: change.lines.join("\n"),
-        },
-        link,
-      ],
-      rest,
-      change.color,
+    logger.debug(`Writing store records ${entry.discord_webhook_id} (${entryVariants.size})`);
+    await saveRecords(
+      `../records/${entry.discord_webhook_id}.json`,
+      Array.from(entryVariants.values()),
+      entry.discord_webhook_id,
     );
   }
-
-  for (const record of knownRecords.values()) {
-    if (!variantKeys.has(record.key)) {
-      await executeDiscordWebhooks(config, [formatProductbase(record, "🗑️")], rest, Colors.Deleted);
-      continue;
-    }
-  }
-
-  await saveRecords(relevantVariants);
 }
 
 const INTERVAL_SECONDS = 600 as const;

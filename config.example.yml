@@ -1,3 +1,9 @@
 - discord_webhook_token: ""
   discord_webhook_id: ""
   description: "short description"
+  catalogues:
+    - "https://baseurl.com"
+  vendor_any:
+    - "optional list of watched vendor phrases"
+  title_any:
+    - "optional title phrases, matching regardless of vendor"

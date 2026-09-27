@@ -4,8 +4,8 @@ services:
   application:
     volumes:
       - type: bind
-        source: ./products.json
-        target: /usr/shophook/products.json
+        source: ./records
+        target: /usr/shophook/records
     build:
       context: "."
       dockerfile: Dockerfile
