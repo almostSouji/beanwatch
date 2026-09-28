@@ -169,8 +169,6 @@ async function tick() {
               `Item no longer available: ${itemLink}`,
             );
           }
-
-          continue;
         }
 
         if (currentVariantState.priceChange) {
