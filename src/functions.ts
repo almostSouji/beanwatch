@@ -245,8 +245,8 @@ export function variantDifference(
     priceChange:
       productBefore && productAfter && productBefore.price !== productAfter.price
         ? {
-            before: Boolean(productBefore.price),
-            after: Boolean(productAfter.price),
+            before: productBefore.price,
+            after: productAfter.price,
           }
         : null,
     availableChange:
