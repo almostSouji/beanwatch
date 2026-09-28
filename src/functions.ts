@@ -16,8 +16,10 @@ import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 import {
   Config,
-  ProductVairantRecords,
-  ProductVariantRecord,
+  PreparedProductVairantRecords,
+  PreparedProductVariantRecord,
+  ProductVariantRecordsWithMessageId,
+  ProductVariantRecordWithMessageId,
   ShopifyProduct,
   ShopifyResult,
 } from "./model.js";
@@ -36,11 +38,12 @@ export async function postOrEditItem(
     allowed_mentions: { parse: [] },
     components,
   };
-
-  if (messageId) {
-    const url = `/${hookBase}/messages/${messageId}?with_components=true` as `/${string}`;
-    return (await rest.patch(url, { body, auth: false })) as APIMessage;
-  }
+  try {
+    if (messageId) {
+      const url = `/${hookBase}/messages/${messageId}?with_components=true` as `/${string}`;
+      return (await rest.patch(url, { body, auth: false })) as APIMessage;
+    }
+  } catch {}
 
   const url = `/${hookBase}?wait=true&with_components=true` as `/${string}`;
   return (await rest.post(url, { body, auth: false })) as APIMessage;
@@ -87,7 +90,7 @@ export function filterRelevantVariants(
     vendorAny?: string[];
   },
 ) {
-  const relevant: z.output<typeof ProductVairantRecords> = [];
+  const relevant: z.output<typeof PreparedProductVairantRecords> = [];
   logger.debug({ titleAny, vendorAny }, `Filtering ${shopBase} for ${webhookId}`);
 
   for (const product of products) {
@@ -133,8 +136,8 @@ export function filterRelevantVariants(
   return relevant;
 }
 
-export function buildVariantMap(variants: z.output<typeof ProductVairantRecords>) {
-  const map = new Map<string, z.output<typeof ProductVariantRecord>>();
+export function buildVariantMap(variants: z.output<typeof PreparedProductVairantRecords>) {
+  const map = new Map<string, z.output<typeof PreparedProductVariantRecord>>();
 
   for (const variant of variants) {
     map.set(variant.key, variant);
@@ -145,7 +148,7 @@ export function buildVariantMap(variants: z.output<typeof ProductVairantRecords>
 
 export async function saveRecords(
   recordPath: string,
-  variants: z.output<typeof ProductVariantRecord>[],
+  variants: z.output<typeof ProductVariantRecordsWithMessageId>,
   hookId: string,
 ) {
   const path = fileURLToPath(new URL(recordPath, import.meta.url));
@@ -155,10 +158,10 @@ export async function saveRecords(
 }
 
 export async function loadRecords(recordPath: string) {
-  const map = new Map<string, z.output<typeof ProductVariantRecord>>();
+  const map = new Map<string, z.output<typeof ProductVariantRecordWithMessageId>>();
   try {
     const res = await readFile(new URL(recordPath, import.meta.url));
-    const records = ProductVairantRecords.parse(JSON.parse(res.toString()));
+    const records = ProductVariantRecordsWithMessageId.parse(JSON.parse(res.toString()));
 
     for (const record of records) {
       map.set(record.key, record);
@@ -176,14 +179,16 @@ function formatDiscordTimestamp(ms: number) {
   return `<t:${Math.floor(ms / 1_000)}:F>`;
 }
 
-export function variantDifference(
+export function processVariantVersions(
   linkBaseUrl: string,
-  productBefore?: z.output<typeof ProductVariantRecord>,
-  productAfter?: z.output<typeof ProductVariantRecord>,
+  productBefore?: z.output<typeof PreparedProductVariantRecord>,
+  productAfter?: z.output<typeof PreparedProductVariantRecord>,
 ) {
   const newestVersion = productAfter ?? productBefore;
   if (!newestVersion) {
-    return undefined;
+    throw new Error(
+      `Expected to find either productBefore (${Boolean(productBefore)}) or productAfter (${Boolean(productAfter)}) but found none.`,
+    );
   }
 
   const detailLines = [

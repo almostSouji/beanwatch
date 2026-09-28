@@ -40,7 +40,7 @@ export const ShopifyResult = z.object({
   products: z.array(ShopifyProduct),
 });
 
-export const ProductVariantRecord = z.object({
+export const PreparedProductVariantRecord = z.object({
   key: z.string(),
   price: z.number(),
   available: z.boolean(),
@@ -51,10 +51,15 @@ export const ProductVariantRecord = z.object({
   handle: z.string(),
   createdTimestamp: z.number(),
   updatedTimestamp: z.number().optional(),
-  messageId: z.string().optional(),
   hookId: z.string(),
   shopBase: z.string(),
   vendor: z.string(),
 });
 
-export const ProductVairantRecords = z.array(ProductVariantRecord);
+export const PreparedProductVairantRecords = z.array(PreparedProductVariantRecord);
+
+export const ProductVariantRecordWithMessageId = PreparedProductVariantRecord.extend({
+  messageId: z.string(),
+});
+
+export const ProductVariantRecordsWithMessageId = z.array(ProductVariantRecordWithMessageId);

@@ -9,11 +9,11 @@ import {
   loadRecords,
   filterRelevantVariants,
   saveRecords,
-  variantDifference,
+  processVariantVersions,
   postOrEditItem,
   postJournal,
 } from "./functions.js";
-import { ProductVariantRecord, ShopifyProduct } from "./model.js";
+import { ProductVariantRecordWithMessageId, ShopifyProduct } from "./model.js";
 
 const rest = new REST({ version: "10" });
 const controller = new AbortController();
@@ -65,7 +65,7 @@ async function tick() {
 
   for (const entry of config) {
     const knownRecords = await loadRecords(`../records/${entry.discord_webhook_id}.json`);
-    const entryVariants = new Map<string, z.output<typeof ProductVariantRecord>>();
+    const entryVariants = new Map<string, z.output<typeof ProductVariantRecordWithMessageId>>();
     const hookBase =
       `/webhooks/${entry.discord_webhook_id}/${entry.discord_webhook_token}` as `/${string}`;
 
@@ -94,21 +94,48 @@ async function tick() {
       for (const variant of filtered) {
         variantKeys.add(variant.key);
 
-        entryVariants.set(variant.key, variant);
         const variantKnownRecord = knownRecords.get(variant.key);
-        const difference = variantDifference(link, variantKnownRecord, variant);
+        if (variantKnownRecord) {
+          entryVariants.set(variant.key, {
+            ...variant,
+            messageId: variantKnownRecord?.messageId,
+          });
+        }
 
-        if (
-          !difference ||
-          (variantKnownRecord && !difference?.availableChange && !difference?.priceChange)
-        ) {
+        const currentVariantState = processVariantVersions(link, variantKnownRecord, variant);
+        const noChange = !currentVariantState.availableChange && !currentVariantState.priceChange;
+
+        if (variantKnownRecord && noChange) {
+          if (variantKnownRecord?.messageId) {
+            const existingMessage = await rest
+              .get(`${hookBase}/messages/${variantKnownRecord?.messageId}`, {
+                auth: false,
+              })
+              .catch((err) => {
+                logger.debug(err);
+                return undefined;
+              });
+
+            if (!existingMessage) {
+              const message = await postOrEditItem(rest, hookBase, currentVariantState.component);
+              entryVariants.set(variant.key, {
+                ...variant,
+                messageId: message.id,
+              });
+            }
+          }
+
           continue;
+        }
+
+        if (variantKnownRecord && !variantKnownRecord.messageId) {
+          throw new Error("Known variant without message association");
         }
 
         const message = await postOrEditItem(
           rest,
           hookBase,
-          difference.component,
+          currentVariantState.component,
           variantKnownRecord?.messageId,
         );
 
@@ -121,20 +148,20 @@ async function tick() {
           continue;
         }
 
-        if (difference.availableChange) {
+        if (currentVariantState.availableChange) {
           logger.debug(
-            { change: difference.availableChange },
+            { change: currentVariantState.availableChange },
             `Availability change ${variant.handle}`,
           );
 
-          if (difference.availableChange.after) {
+          if (currentVariantState.availableChange.after) {
             await postJournal(
               rest,
               hookBase,
               entry.discord_thread_id,
               `Item became available: ${itemLink}`,
             );
-          } else if (difference.availableChange.before) {
+          } else if (currentVariantState.availableChange.before) {
             await postJournal(
               rest,
               hookBase,
@@ -146,14 +173,17 @@ async function tick() {
           continue;
         }
 
-        if (difference.priceChange) {
-          logger.debug({ change: difference.priceChange }, `Price change ${variant.handle}`);
+        if (currentVariantState.priceChange) {
+          logger.debug(
+            { change: currentVariantState.priceChange },
+            `Price change ${variant.handle}`,
+          );
 
           await postJournal(
             rest,
             hookBase,
             entry.discord_thread_id,
-            `Price change: ${itemLink} €~~${difference.priceChange.before}~~ **€${difference.priceChange.after}**`,
+            `Price change: ${itemLink} ~~€${currentVariantState.priceChange.before}~~ **€${currentVariantState.priceChange.after}**`,
           );
         }
       }

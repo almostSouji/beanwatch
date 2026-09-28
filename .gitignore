@@ -2,4 +2,6 @@ node_modules
 dist
 *.tsbuildinfo
 config.yml
+config.debug.yml
+config.prod.yml
 records/
