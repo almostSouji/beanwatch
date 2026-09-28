@@ -196,6 +196,8 @@ async function tick() {
         });
 
         logger.debug(`Record ${value.key} no longer available in the shop.`);
+
+        entryVariants.delete(value.key);
         await postJournal(
           rest,
           hookBase,
