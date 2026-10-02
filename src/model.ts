@@ -4,7 +4,7 @@ export const ConfigEntry = z.object({
   discord_webhook_token: z.string(),
   discord_webhook_id: z.string(),
   discord_thread_id: z.string(),
-  description: z.string().nullish(),
+  description: z.string().optional(),
   catalogues: z.string().array(),
   title_any: z.string().array().optional(),
   vendor_any: z.string().array().optional(),
@@ -56,10 +56,15 @@ export const PreparedProductVariantRecord = z.object({
   vendor: z.string(),
 });
 
-export const PreparedProductVairantRecords = z.array(PreparedProductVariantRecord);
+export const PreparedProductVairantRecords = z.array(
+  PreparedProductVariantRecord,
+);
 
-export const ProductVariantRecordWithMessageId = PreparedProductVariantRecord.extend({
-  messageId: z.string(),
-});
+export const ProductVariantRecordWithMessageId =
+  PreparedProductVariantRecord.extend({
+    messageId: z.string(),
+  });
 
-export const ProductVariantRecordsWithMessageId = z.array(ProductVariantRecordWithMessageId);
+export const ProductVariantRecordsWithMessageId = z.array(
+  ProductVariantRecordWithMessageId,
+);

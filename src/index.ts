@@ -64,12 +64,19 @@ async function tick() {
   }
 
   for (const entry of config) {
-    const knownRecords = await loadRecords(`../records/${entry.discord_webhook_id}.json`);
-    const entryVariants = new Map<string, z.output<typeof ProductVariantRecordWithMessageId>>();
+    const knownRecords = await loadRecords(
+      `../records/${entry.discord_webhook_id}.json`,
+    );
+    const entryVariants = new Map<
+      string,
+      z.output<typeof ProductVariantRecordWithMessageId>
+    >();
     const hookBase =
       `/webhooks/${entry.discord_webhook_id}/${entry.discord_webhook_token}` as `/${string}`;
 
-    logger.debug(`Known records loaded for ${entry.discord_webhook_id} (${knownRecords.size})`);
+    logger.debug(
+      `Known records loaded for ${entry.discord_webhook_id} (${knownRecords.size})`,
+    );
 
     const variantKeys = new Set<string>();
     for (const link of entry.catalogues) {
@@ -81,10 +88,15 @@ async function tick() {
         continue;
       }
 
-      const filtered = filterRelevantVariants(catalogue, entry.discord_webhook_id, link, {
-        titleAny: entry.title_any,
-        vendorAny: entry.vendor_any,
-      });
+      const filtered = filterRelevantVariants(
+        catalogue,
+        entry.discord_webhook_id,
+        link,
+        {
+          titleAny: entry.title_any,
+          vendorAny: entry.vendor_any,
+        },
+      );
 
       logger.debug(
         { total: catalogue.length, filtered: filtered.length },
@@ -102,8 +114,14 @@ async function tick() {
           });
         }
 
-        const currentVariantState = processVariantVersions(link, variantKnownRecord, variant);
-        const noChange = !currentVariantState.availableChange && !currentVariantState.priceChange;
+        const currentVariantState = processVariantVersions(
+          link,
+          variantKnownRecord,
+          variant,
+        );
+        const noChange =
+          !currentVariantState.availableChange &&
+          !currentVariantState.priceChange;
 
         if (variantKnownRecord && noChange) {
           if (variantKnownRecord?.messageId) {
@@ -117,7 +135,11 @@ async function tick() {
               });
 
             if (!existingMessage) {
-              const message = await postOrEditItem(rest, hookBase, currentVariantState.component);
+              const message = await postOrEditItem(
+                rest,
+                hookBase,
+                currentVariantState.component,
+              );
               entryVariants.set(variant.key, {
                 ...variant,
                 messageId: message.id,
@@ -144,7 +166,12 @@ async function tick() {
         const itemLink = `[${variant.name}](<${link}/products/${variant.handle}?variant=${variant.variantId}>)`;
 
         if (!variantKnownRecord) {
-          await postJournal(rest, hookBase, entry.discord_thread_id, `New Item: ${itemLink}`);
+          await postJournal(
+            rest,
+            hookBase,
+            entry.discord_thread_id,
+            `New Item: ${itemLink}`,
+          );
           continue;
         }
 
@@ -189,11 +216,13 @@ async function tick() {
 
     for (const [key, value] of knownRecords.entries()) {
       if (!variantKeys.has(key)) {
-        await rest.delete(`${hookBase}/messages/${value.messageId}`, { auth: false }).catch(() => {
-          logger.info(
-            `Hook message ${hookBase}/messages/${value.messageId} for record ${value.key} already deleted`,
-          );
-        });
+        await rest
+          .delete(`${hookBase}/messages/${value.messageId}`, { auth: false })
+          .catch(() => {
+            logger.info(
+              `Hook message ${hookBase}/messages/${value.messageId} for record ${value.key} already deleted`,
+            );
+          });
 
         logger.debug(`Record ${value.key} no longer available in the shop.`);
 
@@ -207,7 +236,9 @@ async function tick() {
       }
     }
 
-    logger.debug(`Writing store records ${entry.discord_webhook_id} (${entryVariants.size})`);
+    logger.debug(
+      `Writing store records ${entry.discord_webhook_id} (${entryVariants.size})`,
+    );
     await saveRecords(
       `../records/${entry.discord_webhook_id}.json`,
       Array.from(entryVariants.values()),

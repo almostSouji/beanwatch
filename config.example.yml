@@ -1,5 +1,6 @@
 - discord_webhook_token: ""
   discord_webhook_id: ""
+  discord_thread_id: ""
   description: "short description"
   catalogues:
     - "https://baseurl.com"
