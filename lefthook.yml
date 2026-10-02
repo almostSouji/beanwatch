@@ -5,7 +5,7 @@
 pre-commit:
   jobs:
     - glob: "*.{js,ts,cjs,mjs,d.cts,d.mts,jsx,tsx,json,jsonc}"
-      run: npx biome check --write --no-errors-on-unmatched --files-ignore-unknown=true --colors=off {staged_files}
+      run: npx run lint:fix && fmt:check
       stage_fixed: true
 
 commit-msg:

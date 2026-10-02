@@ -8,6 +8,7 @@ export const ConfigEntry = z.object({
   catalogues: z.string().array(),
   title_any: z.string().array().optional(),
   vendor_any: z.string().array().optional(),
+  allowed_sizes: z.string().array().optional(),
 });
 
 export const Config = z.array(ConfigEntry);
@@ -25,6 +26,14 @@ export const ShopifyVariant = z.object({
   available: z.boolean(),
   created_at: z.string(),
   updated_at: z.string().nullish(),
+  option1: z.string().nullish(),
+  option2: z.string().nullish(),
+  option3: z.string().nullish(),
+});
+
+export const ShopifyProductOption = z.object({
+  name: z.string(),
+  values: z.string().array(),
 });
 
 export const ShopifyProduct = z.object({
@@ -34,6 +43,7 @@ export const ShopifyProduct = z.object({
   variants: z.array(ShopifyVariant),
   images: z.array(ShopifyImage).optional(),
   vendor: z.string(),
+  options: ShopifyProductOption.array().optional(),
 });
 
 export const ShopifyResult = z.object({
@@ -56,15 +66,20 @@ export const PreparedProductVariantRecord = z.object({
   vendor: z.string(),
 });
 
-export const PreparedProductVairantRecords = z.array(
-  PreparedProductVariantRecord,
-);
+export const ProductVariantRecordWithMessageId = PreparedProductVariantRecord.extend({
+  messageId: z.string(),
+});
+export const ProductVariantRecordsWithMessageId = ProductVariantRecordWithMessageId.array();
 
-export const ProductVariantRecordWithMessageId =
-  PreparedProductVariantRecord.extend({
-    messageId: z.string(),
-  });
-
-export const ProductVariantRecordsWithMessageId = z.array(
-  ProductVariantRecordWithMessageId,
-);
+export type ProductVariantWithIdMap = Map<
+  string,
+  z.output<typeof ProductVariantRecordWithMessageId>
+>;
+export type ProductMap = Map<number, z.output<typeof ShopifyProduct>>;
+export type ProductRecords = Map<string, z.output<typeof ProductVariantRecordWithMessageId>>;
+export type ShopProductMap = Map<string, ProductMap>;
+export type ProductFilters = Pick<
+  z.output<typeof ConfigEntry>,
+  "vendor_any" | "title_any" | "allowed_sizes"
+>;
+export type PreparedProductMap = Map<string, z.output<typeof PreparedProductVariantRecord>>;

@@ -23,6 +23,9 @@ Configuration is read from `./config.yml` and follows the following format:
     - "optional list of watched vendor phrases"
   title_any:
     - "optional title phrases, matching regardless of vendor"
+  allowed_sizes:
+    - L
+    - XL
 ```
 
 - `discord_webhook_token` (`string`): token part of the discord webhook to use
@@ -33,6 +36,7 @@ Configuration is read from `./config.yml` and follows the following format:
 - `vendor_any` (`list[string]`, optional): vendors matching any of the phrases in this list will be tracked
 - `title_any` (`list[string]`, optional): product titles matching any of the phrases in this list will be tracked
 - either `vendor_any` or `title_any` are required, else nothing will be tracked
+- `allowed_sizes` (`list[string]`, optional): merchandise sizes that should be logged, ignores all other size variants (determined by size options being available on the produc)
 
 > [!IMPORTANT]
 > `discord_thread_id` has to be a thread created in the same channel as the webhook is placed in.

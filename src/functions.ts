@@ -16,12 +16,13 @@ import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 import {
   Config,
-  PreparedProductVairantRecords,
   PreparedProductVariantRecord,
-  ProductVariantRecordsWithMessageId,
-  ProductVariantRecordWithMessageId,
+  ProductMap,
   ShopifyProduct,
   ShopifyResult,
+  ProductVariantRecordsWithMessageId,
+  ProductVariantWithIdMap,
+  ProductVariantRecordWithMessageId,
 } from "./model.js";
 import * as z from "zod";
 import { writeFileSync } from "node:fs";
@@ -43,7 +44,13 @@ export async function postOrEditItem(
       const url = `/${hookBase}/messages/${messageId}?with_components=true` as `/${string}`;
       return (await rest.patch(url, { body, auth: false })) as APIMessage;
     }
-  } catch {}
+  } catch (_err) {
+    const error = _err as Error;
+    if (!("status" in error && error.status === 404)) {
+      logger.error(error, "Non-404 error when trying to retrieve a webhook message");
+      throw error;
+    }
+  }
 
   const url = `/${hookBase}?wait=true&with_components=true` as `/${string}`;
   return (await rest.post(url, { body, auth: false })) as APIMessage;
@@ -67,33 +74,67 @@ export async function postJournal(
 }
 
 export async function loadConfig(path: string) {
-  const configYaml = await readFile(fileURLToPath(new URL(path, import.meta.url)));
+  const configYaml = await readFile(path);
   const configObject = parse(configYaml.toString());
 
   return Config.parse(configObject);
 }
 
-export async function fetchProducts(link: string) {
-  const res = await fetch(link).then((r) => r.json());
-  return ShopifyResult.parse(res)?.products;
+const KEY_SEPARATOR = "|" as const;
+export function recordKey(shopBase: string, productId: number, variantId: number) {
+  return [shopBase, productId, variantId].join(KEY_SEPARATOR);
+}
+
+async function fetchProductPage(baseLink: string, pageSize: number, page: number) {
+  const res = await fetch(`${baseLink}/products.json?limit=${pageSize}&page=${page}`).then((r) =>
+    r.json(),
+  );
+  const products = ShopifyResult.parse(res).products;
+  const productMap = new Map<number, z.output<typeof ShopifyProduct>>();
+
+  for (const product of products) {
+    productMap.set(product.id, product);
+  }
+
+  return productMap;
+}
+
+export async function fetchProducts(baseLink: string, pageSize: number) {
+  const productMap = new Map<number, z.output<typeof ShopifyProduct>>();
+
+  let page = 1;
+  while (page > 0) {
+    const pageProducts = await fetchProductPage(baseLink, pageSize, page);
+    pageProducts.forEach((product, key) => productMap.set(key, product));
+
+    if (pageProducts.size <= pageSize) {
+      page = 0;
+    }
+  }
+  return productMap;
 }
 
 export function filterRelevantVariants(
-  products: z.output<typeof ShopifyProduct>[],
+  products: ProductMap,
   webhookId: string,
   shopBase: string,
   {
-    titleAny,
-    vendorAny,
+    title_any: titleAny,
+    vendor_any: vendorAny,
+    allowed_sizes: allowedSizes,
   }: {
-    titleAny?: string[];
-    vendorAny?: string[];
+    title_any?: string[];
+    vendor_any?: string[];
+    allowed_sizes?: string[];
   },
 ) {
-  const relevant: z.output<typeof PreparedProductVairantRecords> = [];
+  const relevant = new Map<string, z.output<typeof PreparedProductVariantRecord>>();
   logger.debug({ titleAny, vendorAny }, `Filtering ${shopBase} for ${webhookId}`);
+  const lowerAllowedSizes = allowedSizes?.map((size) => size.toLowerCase()) ?? [];
 
-  for (const product of products) {
+  for (const product of products.values()) {
+    const productSizes = product.options?.find((option) => option.name.toLowerCase() === "size");
+
     const lowerTitle = product.title.toLowerCase();
     const lowerVendor = product.vendor.toLowerCase();
 
@@ -106,7 +147,20 @@ export function filterRelevantVariants(
 
     if (titleAnyConditionMet || vendorAnyConditionMet) {
       for (const variant of product.variants) {
-        const key = `${product.id}:${variant.id}`;
+        if (productSizes) {
+          const variantSize = [variant.option1, variant.option2, variant.option3].find(
+            (option) => option && productSizes.values.includes(option),
+          );
+
+          if (variantSize) {
+            const lowerSize = variantSize.toLowerCase();
+            if (!lowerAllowedSizes?.includes(lowerSize)) {
+              continue;
+            }
+          }
+        }
+
+        const key = recordKey(shopBase, product.id, variant.id);
         const name =
           variant.title === "Default Title" ? product.title : `${product.title} - ${variant.title}`;
         const image = variant.featured_image?.src ?? product.images?.[0]?.src;
@@ -114,7 +168,7 @@ export function filterRelevantVariants(
         const variantCreatedAt = new Date(variant.created_at);
         const variantUpdatedAt = variant.updated_at ? new Date(variant.updated_at) : undefined;
 
-        relevant.push({
+        relevant.set(key, {
           key,
           price: Number(variant.price),
           available: variant.available,
@@ -136,31 +190,19 @@ export function filterRelevantVariants(
   return relevant;
 }
 
-export function buildVariantMap(variants: z.output<typeof PreparedProductVairantRecords>) {
-  const map = new Map<string, z.output<typeof PreparedProductVariantRecord>>();
-
-  for (const variant of variants) {
-    map.set(variant.key, variant);
-  }
-
-  return map;
-}
-
-export async function saveRecords(
-  recordPath: string,
-  variants: z.output<typeof ProductVariantRecordsWithMessageId>,
-  hookId: string,
-) {
-  const path = fileURLToPath(new URL(recordPath, import.meta.url));
-  const stringVariants = JSON.stringify(variants.map((variant) => ({ ...variant, hookId })));
+export async function saveRecords(variants: ProductVariantWithIdMap, hookId: string) {
+  const path = fileURLToPath(new URL(`../records/${hookId}.json`, import.meta.url));
+  const stringVariants = JSON.stringify(
+    Array.from(variants.values()).map((variant) => ({ ...variant, hookId })),
+  );
 
   writeFileSync(path, stringVariants);
 }
 
-export async function loadRecords(recordPath: string) {
+export async function loadRecords(hookId: string) {
   const map = new Map<string, z.output<typeof ProductVariantRecordWithMessageId>>();
   try {
-    const res = await readFile(new URL(recordPath, import.meta.url));
+    const res = await readFile(new URL(`../records/${hookId}.json`, import.meta.url));
     const records = ProductVariantRecordsWithMessageId.parse(JSON.parse(res.toString()));
 
     for (const record of records) {
@@ -227,6 +269,7 @@ export function processVariantVersions(
       } satisfies APITextDisplayComponent);
 
   return {
+    productVariantLink: `[${newestVersion.name}](<${linkBaseUrl}/products/${newestVersion.handle}?variant=${newestVersion.variantId}>)`,
     component: [
       {
         type: ComponentType.Container,
