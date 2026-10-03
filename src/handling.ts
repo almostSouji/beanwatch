@@ -166,7 +166,13 @@ async function processCatalogue(
       messageId: message.id,
     });
 
-    await processJournal(discordRest, hookBase, configEntry.discord_thread_id, comparisonState);
+    await processJournal(
+      discordRest,
+      hookBase,
+      configEntry.discord_thread_id,
+      comparisonState,
+      knownRecord,
+    );
   }
 
   return recordedVariants;
